@@ -4,6 +4,7 @@ import { decodeHTML } from "entities";
 
 const delimiters = [
   { left: "$$", right: "$$", display: false },
+  { left: "$", right: "$", display: false },
   { left: "\\(", right: "\\)", display: false },
   { left: "\\[", right: "\\]", display: false },
 ];
@@ -37,7 +38,6 @@ export class KatexDirective {
       const content = this.content();
       if (content) {
         const decodedContent = decodeHTML(content).replace(/\u00A0/g, " ");
-
         const renderedLatex = this.renderWithDelimiters(
           decodedContent,
           delimiters
@@ -69,53 +69,74 @@ export class KatexDirective {
     let position = 0;
 
     while (position < latexString.length) {
-      let match = null;
-      let matchStart = -1;
-      let matchEnd = -1;
-      let isDisplay = false;
+      let bestMatch: { delimiter: any; start: number; end: number } | null = null;
 
-      for (let delimiter of delimiters) {
-        let start = latexString.indexOf(delimiter.left, position);
-        if (start !== -1 && (matchStart === -1 || start < matchStart)) {
-          let end = latexString.indexOf(
-            delimiter.right,
-            start + delimiter.left.length
-          );
-          if (end !== -1) {
-            match = delimiter;
-            matchStart = start;
-            matchEnd = end;
-            isDisplay = delimiter.display;
-          }
+      for (const delimiter of delimiters) {
+        let searchPos = position;
+        
+        while (true) {
+            const start = latexString.indexOf(delimiter.left, searchPos);
+            if (start === -1) break; 
+
+            const end = latexString.indexOf(delimiter.right, start + delimiter.left.length);
+            if (end === -1) {
+                searchPos = start + 1;
+                continue;
+            }
+
+            if (delimiter.left === "$") {
+              const charBefore = start > 0 ? latexString[start - 1] : null;
+              const charAfter = end + 1 < latexString.length ? latexString[end + 1] : null;
+
+              if (charBefore && charBefore.toUpperCase() === 'R') {
+                  searchPos = start + 1; 
+                  continue;
+              }
+
+              const content = latexString.slice(start + 1, end);
+              if (!isNaN(parseFloat(content)) && isFinite(Number(content))) {
+                 if (charAfter === null || !/\w/.test(charAfter)) {
+                    searchPos = start + 1; 
+                    continue;
+                 }
+              }
+            }
+
+            if (bestMatch === null || start < bestMatch.start) {
+              bestMatch = { delimiter, start, end };
+            }
+            break; 
         }
       }
 
-      if (match === null) {
+
+      if (bestMatch === null) {
         htmlString += this.escapeHtml(latexString.slice(position));
         break;
       }
 
-      htmlString += this.escapeHtml(latexString.slice(position, matchStart));
+      htmlString += this.escapeHtml(latexString.slice(position, bestMatch.start));
 
-      let latex = latexString.slice(matchStart + match.left.length, matchEnd);
+      const latex = latexString.slice(bestMatch.start + bestMatch.delimiter.left.length, bestMatch.end);
 
       try {
-        let renderedHTML = katex.renderToString(latex, {
+        const renderedHTML = katex.renderToString(latex, {
           throwOnError: false,
-          displayMode: isDisplay,
+          displayMode: bestMatch.delimiter.display,
           ...this.getKatexOptions(),
         });
         htmlString += renderedHTML;
       } catch (e) {
         console.error("KaTeX parse error:", e);
-        htmlString += this.escapeHtml(match.left + latex + match.right);
+        htmlString += this.escapeHtml(bestMatch.delimiter.left + latex + bestMatch.delimiter.right);
       }
 
-      position = matchEnd + match.right.length;
+      position = bestMatch.end + bestMatch.delimiter.right.length;
     }
 
     return htmlString;
   }
+
 
   private getKatexOptions(): KatexOptions {
     const defaultMacros = {
